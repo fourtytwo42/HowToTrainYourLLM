@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./server
+    environment:
+      - DATABASE_URL=file:./data/dev.db
+      - OLLAMA_API_URL=http://host.docker.internal:11434
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./python:/app/python
+    networks:
+      - modelworkshop
+    ports:
+      - "8765:3001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+# python-worker now runs locally - see setup instructions
+
+volumes:
+  redis_data: 
+
+networks:
+  modelworkshop:
+    driver: bridge 

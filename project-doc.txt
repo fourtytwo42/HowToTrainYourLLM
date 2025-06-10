@@ -1,0 +1,499 @@
+Below is the **comprehensive project documentation** for your local “Model Workshop” pipeline. It covers **every** major component—front-end, back-end, worker, Python training scripts—down to package versions, file structure, installation commands, and detailed methods for complex tasks like LoRA fine-tuning, GGUF conversion, and GPU monitoring.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [Technology Stack & Versions](#technology-stack--versions)
+4. [Directory Structure](#directory-structure)
+5. [Front-end (React + Tailwind)](#front-end-react--tailwind)
+
+   1. [Installation & Setup](#installation--setup)
+   2. [Key Pages & Components](#key-pages--components)
+   3. [Validation & State Management](#validation--state-management)
+6. [Back-end (Node.js + Express)](#back-end-nodejs--express)
+
+   1. [Installation & Setup](#installation--setup-1)
+   2. [API Routes](#api-routes)
+   3. [Job Queue & Worker](#job-queue--worker)
+   4. [GPU Monitoring](#gpu-monitoring)
+7. [Python Training Pipeline](#python-training-pipeline)
+
+   1. [Installation & Setup](#installation--setup-2)
+   2. [LoRA Fine-Tuning (`train.py`)](#lora-fine-tuning-trainpy)
+   3. [GGUF Merge & Quantize (`merge_quantize.py`)](#gguf-merge--quantize-merge_quantizepy)
+8. [Data Format & Storage](#data-format--storage)
+9. [End-to-End Workflow](#end-to-end-workflow)
+10. [Error Handling & Logging](#error-handling--logging)
+11. [Security & Isolation](#security--isolation)
+12. [Future Enhancements](#future-enhancements)
+13. [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+The **Model Workshop** is a locally-hosted dashboard that lets you:
+
+1. **Pull** Llama 3.1 (8B) variants via Ollama
+2. **Upload** your own JSONL training data (prompt ↔ completion pairs)
+3. **Configure** hyperparameters (batch size, LoRA rank, quantization, early-stop)
+4. **Train** a LoRA-augmented, quantized model on your RTX 3090
+5. **Monitor** logs, GPU utilization, and receive notifications
+6. **Test** the newly trained model with ad-hoc prompts
+7. **Manage** presets, prompt templates, and theme (light/dark)
+
+Everything runs locally: React frontend, Node API + BullMQ queue, Python LoRA training, and Ollama for inference.
+
+---
+
+## Prerequisites
+
+* **OS:** Linux/macOS/Windows WSL
+* **GPU:** NVIDIA RTX 3090 (24 GB VRAM)
+* **Docker (recommended)** for isolation of Python training
+* **Node.js** ≥ 18.16.1 (LTS)
+* **Python** ≥ 3.10.12
+* **Redis** ≥ 6.2 (local or Docker)
+* **Ollama CLI** ≥ 0.4.0 (for `pull`, `run`, `create`)
+
+---
+
+## Technology Stack & Versions
+
+| Layer            | Package                      | Version       |
+| ---------------- | ---------------------------- | ------------- |
+| **Front-end**    | react                        | 18.2.0        |
+|                  | vite                         | 4.3.9         |
+|                  | tailwindcss                  | 3.3.2         |
+|                  | headlessui/react             | 1.7.14        |
+|                  | radix-ui/react-dropdown-menu | 1.0.0         |
+|                  | @tanstack/react-query        | 4.29.9        |
+|                  | react-hook-form              | 7.43.9        |
+|                  | zod                          | 3.22.1        |
+|                  | ajv                          | 8.12.0        |
+|                  | socket.io-client             | 4.7.2         |
+|                  | react-toastify               | 9.1.3         |
+| **Back-end**     | express                      | 4.18.2        |
+|                  | bullmq                       | 1.81.0        |
+|                  | ioredis                      | 5.3.2         |
+|                  | prisma                       | 4.18.0        |
+|                  | ajv                          | 8.12.0        |
+|                  | socket.io                    | 4.7.2         |
+|                  | node-nvidia-smi              | 1.0.2         |
+|                  | winston                      | 3.8.2         |
+| **Python**       | transformers                 | 4.33.2        |
+|                  | accelerate                   | 0.18.0        |
+|                  | bitsandbytes                 | 0.39.0        |
+|                  | peft                         | 0.4.0         |
+|                  | datasets                     | 2.12.0        |
+|                  | huggingface-hub              | 0.17.4        |
+|                  | torch                        | 2.1.1         |
+| **System Tools** | huggingface-hub CLI          | latest        |
+|                  | llama.cpp                    | 0.1.0 scripts |
+
+---
+
+## Directory Structure
+
+```bash
+model-workshop/
+├── client/                         # React + Tailwind UI
+│   ├── public/
+│   ├── src/
+│   │   ├── pages/                  # Vite pages or App.tsx
+│   │   ├── components/             # Reusable UI bits
+│   │   ├── hooks/                  # data fetching & sockets
+│   │   ├── forms/                  # React Hook Form + Zod schemas
+│   │   └── utils/                  # API clients
+│   ├── tailwind.config.js
+│   └── package.json
+│
+├── server/                         # Node.js + Express API
+│   ├── src/
+│   │   ├── routes/
+│   │   │   ├── modelRoutes.ts      # /api/models
+│   │   │   ├── dataRoutes.ts       # /api/data
+│   │   │   └── jobRoutes.ts        # /api/jobs
+│   │   ├── controllers/
+│   │   ├── services/
+│   │   │   ├── ollamaService.ts
+│   │   │   └── trainingService.ts
+│   │   ├── queue/
+│   │   │   ├── index.ts            # BullMQ setup
+│   │   │   └── workers.ts          # job processor
+│   │   ├── utils/
+│   │   │   ├── gpuMonitor.ts       # wraps node-nvidia-smi
+│   │   │   └── logger.ts           # Winston config
+│   │   └── app.ts                  # Express app bootstrap
+│   └── package.json
+│
+├── python/                         # Training & conversion scripts
+│   ├── train.py                    # LoRA fine-tuning job
+│   ├── merge_quantize.py           # llama.cpp GGUF merge & quant
+│   └── requirements.txt            # Pin Python packages
+│
+├── data/                           # Persistent storage
+│   ├── raw/                        # Uploaded JSONL
+│   └── corpus/                     # Final JSONL for fine-tuning
+│
+├── logs/                           # STDOUT/STDERR per job
+└── prisma/                         # Prisma schema & migrations
+```
+
+---
+
+## Front-end (React + Tailwind)
+
+### Installation & Setup
+
+```bash
+cd client
+npm install react@18.2.0 vite@4.3.9 tailwindcss@3.3.2 \
+  @headlessui/react@1.7.14 @radix-ui/react-dropdown-menu \
+  @tanstack/react-query@4.29.9 react-hook-form@7.43.9 \
+  zod@3.22.1 ajv@8.12.0 socket.io-client@4.7.2 react-toastify@9.1.3
+npx tailwindcss init -p
+```
+
+**`tailwind.config.js`**:
+
+```js
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  darkMode: 'class',
+  content: ['./src/**/*.{js,jsx,ts,tsx}', './public/index.html'],
+  theme: { extend: {} },
+  plugins: [],
+};
+```
+
+### Key Pages & Components
+
+1. **`ModelSelector.tsx`**
+
+   * Dropdown of `GET /api/models`
+   * Displays context & size badges
+   * Refresh & delete icons
+
+2. **`DataUploader.tsx`**
+
+   * Uses `<input type="file" accept=".jsonl" />` + drag-and-drop
+   * Validates with AJV JSON Schema:
+
+     ```jsonc
+     {
+       "type": "array",
+       "items": {
+         "type": "object",
+         "properties": {
+           "prompt": { "type": "string" },
+           "completion": { "type": "string" }
+         },
+         "required": ["prompt","completion"]
+       }
+     }
+     ```
+   * “Replace vs Append” radio
+
+3. **`HyperparamForm.tsx`**
+
+   * Built with React Hook Form + Zod schema
+   * Controls: batchSize, epochs, lr, gradAccum, loraRank/α, dropout, quantization, earlyStop settings
+
+4. **`LogsViewer.tsx`**
+
+   * Connects to Socket.IO `/logs-room`
+   * Filters INFO/WARN/ERROR, search box, auto-scroll toggle
+
+5. **`TestConsole.tsx`**
+
+   * Textarea + sliders (temp, maxTokens)
+   * Calls `POST /api/jobs/:id/test` → streams response
+
+6. **`ThemeToggle.tsx`**
+
+   * Toggles `document.documentElement.classList` between `dark`/light
+   * Stores choice in localStorage
+
+### Validation & State Management
+
+* **React Query** caches all GET endpoints (models, presets).
+* **Optimistic updates** for preset creation/deletion.
+* **AJV** re-validates JSONL on the server to prevent bad data in the queue.
+* **Toast Notifications** (react-toastify) for success/failure of pull/train/test jobs.
+
+---
+
+## Back-end (Node.js + Express)
+
+### Installation & Setup
+
+```bash
+cd server
+npm install express@4.18.2 bullmq@1.81.0 ioredis@5.3.2 \
+  prisma@4.18.0 @prisma/client ajv@8.12.0 \
+  socket.io@4.7.2 node-nvidia-smi@1.0.2 winston@3.8.2
+npx prisma init
+```
+
+* Configure `DATABASE_URL="file:./dev.db"` in `.env`
+* Define your Prisma schema for **Presets**, **Prompts**, **Jobs**, **Models**
+* `npx prisma migrate dev --name init`
+
+### API Routes
+
+* **`GET /api/models`** — list local Ollama models (`ollama list --json`)
+* **`POST /api/models/pull`** — enqueue a pull job
+* **`POST /api/data/upload`** — AJV validate & save JSONL to `data/raw/`
+* **`POST /api/jobs/train`** — enqueue a BullMQ “train” job with hyperparams+flags
+* **`GET /api/jobs/:id/logs`** — fetch past logs
+* **`POST /api/jobs/:id/test`** — run `ollama run` against trained model
+
+### Job Queue & Worker
+
+* **BullMQ**
+
+  ```ts
+  // queue/index.ts
+  import { Queue, Worker, QueueEvents } from 'bullmq';
+  export const trainQueue = new Queue('train', { connection: { host:'localhost', port:6379 } });
+  export const worker = new Worker('train', async job => {
+    // spawn Python and llama.cpp commands, stream to logs
+  });
+  ```
+* **Worker Responsibilities**
+
+  1. Spawn `python train.py --data <file> --out <dir> --...`
+  2. Upon success, spawn `python merge_quantize.py ...`
+  3. Run `ollama create custom-<job.id> -f Modelfile`
+  4. Emit progress via Socket.IO to front-end
+
+### GPU Monitoring
+
+* **`gpuMonitor.ts`**
+
+  ```ts
+  import nvsmi from 'node-nvidia-smi';
+  export async function getGpuStats() {
+    const data = await nvsmi();
+    // parse for VRAM used/total, utilization, temperature
+    return {
+      vramUsed: data.memory.used,
+      vramTotal: data.memory.total,
+      utilization: data.gpu,
+      temperature: data.temperature.gpu,
+    };
+  }
+  ```
+* Poll every 2 s and emit via Socket.IO to update the header widget.
+
+---
+
+## Python Training Pipeline
+
+### Installation & Setup
+
+```bash
+cd python
+pip install transformers==4.33.2 accelerate==0.18.0 \
+  bitsandbytes==0.39.0 peft==0.4.0 \
+  datasets==2.12.0 huggingface-hub==0.17.4 torch==2.1.1
+```
+
+### LoRA Fine-Tuning (`train.py`)
+
+```python
+import argparse, os
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+from peft import LoraConfig, get_peft_model
+from datasets import load_dataset
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--base", required=True)
+parser.add_argument("--data", required=True)
+parser.add_argument("--out", required=True)
+parser.add_argument("--batch_size", type=int, default=4)
+parser.add_argument("--epochs", type=int, default=3)
+parser.add_argument("--lr", type=float, default=2e-4)
+parser.add_argument("--lora_r", type=int, default=16)
+parser.add_argument("--lora_alpha", type=int, default=16)
+parser.add_argument("--dropout", type=float, default=0.1)
+parser.add_argument("--quatization", choices=["none","q4_0","q4_1"], default="none")
+args = parser.parse_args()
+
+# Tokenizer & model (with 4-bit if requested)
+bnb_config = None
+if args.quatization != "none":
+    from transformers import BitsAndBytesConfig
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
+
+tokenizer = AutoTokenizer.from_pretrained(args.base)
+model = AutoModelForCausalLM.from_pretrained(
+    args.base,
+    quantization_config=bnb_config,
+    device_map="auto"
+)
+model.config.use_cache = False
+
+# LoRA setup
+lora_cfg = LoraConfig(
+    task_type="CAUSAL_LM", r=args.lora_r,
+    lora_alpha=args.lora_alpha,
+    lora_dropout=args.dropout,
+    target_modules=["q_proj","k_proj","v_proj","o_proj"]
+)
+model = get_peft_model(model, lora_cfg)
+
+# Dataset loading
+raw = load_dataset("json", data_files=args.data)["train"]
+def preprocess(x):
+    return tokenizer(x["prompt"] + x["completion"], truncation=True)
+dataset = raw.map(preprocess, batched=True)
+
+# Trainer
+training_args = TrainingArguments(
+    output_dir=args.out,
+    per_device_train_batch_size=args.batch_size,
+    num_train_epochs=args.epochs,
+    learning_rate=args.lr,
+    fp16=True,
+    logging_steps=10,
+    save_strategy="no"
+)
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    tokenizer=tokenizer,
+)
+trainer.train()
+model.save_pretrained(os.path.join(args.out, "lora_adapter"))
+tokenizer.save_pretrained(os.path.join(args.out, "lora_adapter"))
+```
+
+### GGUF Merge & Quantize (`merge_quantize.py`)
+
+```python
+import subprocess, argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--base_fp16", required=True)
+parser.add_argument("--lora_adapter", required=True)
+parser.add_argument("--out_gguf", required=True)
+parser.add_argument("--quant_bits", type=int, choices=[2,4,8], default=4)
+args = parser.parse_args()
+
+# Convert HF → GGUF FP16
+subprocess.run([
+    "python3", "convert_hf_to_gguf.py",
+    "--outfile", args.base_fp16.replace(".gguf","-f16.gguf"),
+    args.base_fp16
+], check=True)
+
+# Convert LoRA → GGUF
+subprocess.run([
+    "python3", "convert_lora_to_gguf.py",
+    "--base", args.base_fp16,
+    "--outfile", "lora-adapter.gguf",
+    args.lora_adapter
+], check=True)
+
+# Merge
+subprocess.run([
+    "./llama.cpp/bin/llama-export-lora",
+    "-m", args.base_fp16.replace(".gguf","-f16.gguf"),
+    "--lora", "lora-adapter.gguf",
+    "-o", "merged-f16.gguf"
+], check=True)
+
+# Quantize to Q4_0
+subprocess.run([
+    "./llama.cpp/bin/llama-quantize",
+    "merged-f16.gguf",
+    args.out_gguf,
+    str(args.quant_bits)
+], check=True)
+```
+
+---
+
+## Data Format & Storage
+
+* **Uploaded JSONL** (`data/raw/*.jsonl`):
+
+  ```json
+  {"prompt":"<|system|>…<|eot|>","completion":"…<|eot|>"}
+  ```
+* **Corpus JSONL** (`data/corpus/*.jsonl`): final `{"prompt":…,"completion":…}` pairs for training.
+* **Metadata** stored in SQLite via Prisma: tracks job status, timestamps, presets.
+
+---
+
+## End-to-End Workflow
+
+1. **Pull Model**:
+
+   * Click → `POST /api/models/pull` → BullMQ job → `ollama pull llama3.1:8b-instruct-q4_0`
+2. **Upload Data**:
+
+   * Drag/drop JSONL → client AJV → `POST /api/data/upload` → saved under `data/raw/`
+3. **Configure & Train**:
+
+   * Fill hyperparameters → `POST /api/jobs/train` → queued
+   * Worker runs `train.py` → `merge_quantize.py` → `ollama create custom-<id>`
+4. **Monitor**:
+
+   * Real-time logs via Socket.IO → LogsViewer
+   * GPU stats polled every 2 s → header widget
+   * Toasts on start/complete/fail
+5. **Test**:
+
+   * Enter prompt → `POST /api/jobs/:id/test` → streams `ollama run custom-<id>` output
+
+---
+
+## Error Handling & Logging
+
+* **Structured Logs** with Winston (timestamp, level, message).
+* **API Errors** return `{ error: "...", code: 400/500 }`.
+* **Worker Failures**: caught, logged, status updated in DB, client notified via Socket.IO.
+* **Early-Stop**: Worker monitors loss/timeout and terminates gracefully with status `cancelled`.
+
+---
+
+## Security & Isolation
+
+* **Docker** for Python scripts to sandbox arbitrary code (avoid host contamination).
+* **CORS** restricted to your dev domain.
+* **Rate-Limit** heavy endpoints (uploads, train requests).
+* **Validate** all user inputs (AJV, Zod) to avoid injection.
+
+---
+
+## Future Enhancements
+
+* Multi-GPU support via Horovod or DeepSpeed
+* Model version rollback & diff view
+* Built-in data augmentation pipelines
+* WebAuthn or OAuth for multi-user environments
+* Plugin system for custom data transforms
+
+---
+
+## Troubleshooting
+
+* **“CUDA out of memory”** → lower batch size, use Q4\_0 quantization, free VRAM via `nvidia-smi`.
+* **“AJV validation failed”** → check JSONL schema, view inline error tooltip.
+* **“Ollama CLI not found”** → ensure `ollama` in PATH, `brew install ollama` or `ollama self-update`.
+* **Slow startup** → pre-pull base models and cache in `~/.ollama/models`.
+
+---
+
+With this fully detailed document, you have **everything** needed to stand up, run, and extend your “Model Workshop” on a single RTX 3090—from code to configuration to best practices.
